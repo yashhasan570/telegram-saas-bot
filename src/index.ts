@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import http from 'http';
-import fetch from 'node-fetch'; // Explicitly force the network fetch engine to prevent silent crashes
+const fetch = require('node-fetch'); // Resolves the build error engine directly
 
 // 1. Core Environmental Variables Mapping
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8711869747:AAEZgmkdwa6-Tu6rYXalBx0ypleUGCCwT-o";
