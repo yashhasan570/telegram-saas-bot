@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import http from 'http';
-const fetch = require('node-fetch'); // Resolves the build error engine directly
 
 // 1. Core Environmental Variables Mapping
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8711869747:AAEZgmkdwa6-Tu6rYXalBx0ypleUGCCwT-o";
@@ -24,10 +23,11 @@ interface VendorProduct {
 // Local runtime variables array
 let currentCachedProducts: VendorProduct[] = [];
 
-// 2. Lara Endpoint Request Interceptor
+// 2. Lara Endpoint Request Interceptor using Native Fetch
 async function fetchRemoteProducts(): Promise<VendorProduct[]> {
   try {
-    const response = await fetch(`${API_URL}/products`, {
+    // Using global/native fetch built into Node.js directly
+    const response = await globalThis.fetch(`${API_URL}/products`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${API_KEY}`,
@@ -35,27 +35,30 @@ async function fetchRemoteProducts(): Promise<VendorProduct[]> {
       }
     });
 
-    if (!response.ok) return [];
-    const payload: any = await response.json();
+    if (!response.ok) {
+      console.error(`API response error status: ${response.status}`);
+      return [];
+    }
     
-    if (payload.success && Array.isArray(payload.products)) {
+    const payload: any = await response.json();
+    if (payload && payload.success && Array.isArray(payload.products)) {
       currentCachedProducts = payload.products;
       return payload.products;
     }
     return [];
   } catch (error) {
-    console.error("Lara network endpoint tracking issue:", error);
+    console.error("Lara network connection error:", error);
     return currentCachedProducts;
   }
 }
 
-// Initial Sync
+// Initial pull on startup execution
 fetchRemoteProducts();
 
 // 3. Telegram Core Communication Methods
 async function checkChannelMembership(userId: number): Promise<boolean> {
   try {
-    const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getChatMember?chat_id=${CHANNEL_USERNAME}&user_id=${userId}`);
+    const response = await globalThis.fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getChatMember?chat_id=${CHANNEL_USERNAME}&user_id=${userId}`);
     const data: any = await response.json();
     return data.ok && ['creator', 'administrator', 'member'].includes(data.result.status);
   } catch {
@@ -67,7 +70,7 @@ async function sendTelegramMessage(chatId: number, text: string, inlineKeyboard?
   const payload: any = { chat_id: chatId, text: text, parse_mode: "HTML" };
   if (inlineKeyboard) payload.reply_markup = { inline_keyboard: inlineKeyboard };
   
-  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+  await globalThis.fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
@@ -75,14 +78,14 @@ async function sendTelegramMessage(chatId: number, text: string, inlineKeyboard?
 }
 
 async function answerCallbackQuery(callbackQueryId: string) {
-  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`, {
+  await globalThis.fetch(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ callback_query_id: callbackQueryId })
   });
 }
 
-// 4. Public Port Routing Engine (Webhook Receiver)
+// 4. Public Webhook Engine
 const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/api/webhook') {
     let buffer = '';
@@ -107,7 +110,7 @@ const server = http.createServer(async (req, res) => {
 
           if (text === "/sync" && userId === ADMIN_ID) {
             await fetchRemoteProducts();
-            await sendTelegramMessage(ADMIN_ID, "🔄 <b>Cache Synchronized!</b> Live product array pulled successfully from remote endpoint.");
+            await sendTelegramMessage(ADMIN_ID, "🔄 <b>Cache Synchronized!</b> Live product array pulled successfully.");
             res.writeHead(200); res.end('OK'); return;
           }
 
@@ -127,7 +130,7 @@ const server = http.createServer(async (req, res) => {
           if (callbackData === "store_products") {
             const liveItems = await fetchRemoteProducts();
             
-            if (liveItems.length === 0) {
+            if (!liveItems || liveItems.length === 0) {
               await sendTelegramMessage(userId, "🛒 <b>Affinity Catalog</b>\n\nNo active products found inside the network catalog right now.");
               res.writeHead(200); res.end('OK'); return;
             }
@@ -165,7 +168,7 @@ const server = http.createServer(async (req, res) => {
             const itemToBuy = currentCachedProducts.find(p => p.id === productId);
 
             if (itemToBuy) {
-              const buyResponse = await fetch(`${API_URL}/purchase`, {
+              const buyResponse = await globalThis.fetch(`${API_URL}/purchase`, {
                 method: "POST",
                 headers: {
                   "Authorization": `Bearer ${API_KEY}`,
@@ -195,7 +198,7 @@ const server = http.createServer(async (req, res) => {
             }
           
           } else if (callbackData === "store_balance") {
-            const balResponse = await fetch(`${API_URL}/balance`, {
+            const balResponse = await globalThis.fetch(`${API_URL}/balance`, {
               headers: { "Authorization": `Bearer ${API_KEY}` }
             });
             const balData: any = await balResponse.json();
@@ -212,12 +215,12 @@ const server = http.createServer(async (req, res) => {
           }
         }
       } catch (err) {
-        console.error("Webhook processing tracking alert:", err);
+        console.error("Webhook running exception:", err);
       }
       res.writeHead(200); res.end('OK');
     });
   } else {
-    res.writeHead(200); res.end('Affinity Live Node Backend Protocol Online');
+    res.writeHead(200); res.end('Affinity Core Server Protocol Online');
   }
 });
 
