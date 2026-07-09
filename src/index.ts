@@ -1,75 +1,57 @@
 import * as crypto from 'crypto';
 import * as http from 'http';
 
-// 1. System Constants & Keys Config
+// 1. Core Environmental Variables Mapping
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8711869747:AAEZgmkdwa6-Tu6rYXalBx0ypleUGCCwT-o";
 const ADMIN_ID = 1880142352;
 const CHANNEL_USERNAME = "@affinitysales570";
-const BINANCE_KEY = process.env.BINANCE_PAY_API_KEY || "vce0dm45ePlzKZ9AETDjE0G8HqahL7dtPO7lB7GLcZmAMJwwZKKcCmacn2cyJXBg";
-const BINANCE_SECRET = process.env.BINANCE_PAY_SECRET || "oATEntQE4k6GtW2F5OF4MkVzDkhfecOwNzbHYD32CRFcJ0f1gSEfpgXRckC6hf7s";
 
-// Secure Live Encrypted Vendor String
-const VENDOR_CODE = "conn_eyJrIjoic2tfY2JmYWY2NjgxMzEwYmJlODg4ODMzMjNjZTQxODRiOGU1MDk3NzA2MWMxMjg1N2Q3IiwidSI6Imh0dHBzOi8vaW5zMjExMjEzMS5vbnJlbmRlci5jb20vOGY3MWFlZGQzNDk0ZTA0MmJiMDY0MDhmNTBiN2Y5MzgifQ==";
+// Decoded connection criteria from Lara's exact payload string
+const API_KEY = "sk_cbfaf6681310bbe88883323ce4184be5097706c12857d7";
+const API_URL = "https://ins2112131.onrender.com/8f71aedd3494e042bb06408f50b7f938";
 
-interface StoreProduct {
+interface VendorProduct {
   id: string;
-  title: string;
-  description: string;
-  price_cents: number;
-  is_enabled: boolean;
-  stock_count: number;
+  name_ar: string;
+  name_en: string;
+  desc_en: string;
+  your_price: number;
+  stock: number | string;
+  is_manual: boolean;
 }
 
-// Global active store list (Starts empty - populated dynamically by live APIs)
-let globalProducts: StoreProduct[] = [];
-let excludedProductIds: string[] = []; // Stores IDs of items you manually deselect
+// Local runtime variables array
+let currentCachedProducts: VendorProduct[] = [];
 
-// Decrypt and query the live vendor server catalog automatically
-async function syncLiveVendorCatalog() {
+// 2. Lara Endpoint Request Interceptor
+async function fetchRemoteProducts(): Promise<VendorProduct[]> {
   try {
-    const rawData = Buffer.from(VENDOR_CODE.replace('conn_', ''), 'base64').toString('utf-8');
-    const config = JSON.parse(rawData);
-    
-    // Call the external vendor database route using their unique token metadata
-    const response = await fetch(config.u, {
-      headers: { "Authorization": `Bearer ${config.k}`, "Content-Type": "application/json" }
+    const response = await fetch(`${API_URL}/products`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json'
+      }
     });
+
+    if (!response.ok) return [];
+    const payload: any = await response.json();
     
-    if (response.ok) {
-      const remoteItems: any = await response.json();
-      const updatedList: StoreProduct[] = [];
-      
-      remoteItems.forEach((item: any) => {
-        const isExcluded = excludedProductIds.includes(item.id.toString());
-        updatedList.push({
-          id: item.id.toString(),
-          title: item.name || item.title,
-          description: item.description || "Instant Digital Delivery",
-          price_cents: Math.round((item.price || 0) * 100), // Standardizes float to dynamic integer currency cents
-          is_enabled: !isExcluded && (item.stock > 0),
-          stock_count: item.stock || 0
-        });
-      });
-      
-      globalProducts = updatedList;
-      console.log(`Successfully synced ${globalProducts.length} live store products.`);
+    if (payload.success && Array.isArray(payload.products)) {
+      currentCachedProducts = payload.products;
+      return payload.products;
     }
+    return [];
   } catch (error) {
-    console.error("Live sync failed, using static operational snapshot:", error);
-    // Secure background fallback so your store remains functional during brief API downtime
-    globalProducts = [
-      { id: "v1", title: "Premium Subscription Account", description: "Instant Account Credentials Delivery", price_cents: 499, is_enabled: true, stock_count: 14 },
-      { id: "v2", title: "AI Elite Tools License", description: "Direct Workspace Access Key", price_cents: 299, is_enabled: true, stock_count: 32 }
-    ];
+    console.error("Lara network endpoint tracking issue:", error);
+    return currentCachedProducts; // Return cached snapshot on failure
   }
 }
 
-// Initial pull on runtime startup execution
-syncLiveVendorCatalog();
-// Refresh data from the provider every 15 minutes automatically
-setInterval(syncLiveVendorCatalog, 15 * 60 * 1000);
+// Initial Sync
+fetchRemoteProducts();
 
-// 2. Telegram Core Gateway Connections
+// 3. Telegram Core Communication Methods
 async function checkChannelMembership(userId: number): Promise<boolean> {
   try {
     const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getChatMember?chat_id=${CHANNEL_USERNAME}&user_id=${userId}`);
@@ -81,7 +63,7 @@ async function checkChannelMembership(userId: number): Promise<boolean> {
 }
 
 async function sendTelegramMessage(chatId: number, text: string, inlineKeyboard?: any) {
-  const payload: any = { chat_id: chatId, text: text, parse_mode: "Markdown" };
+  const payload: any = { chat_id: chatId, text: text, parse_mode: "HTML" }; // Match HTML spec requirement
   if (inlineKeyboard) payload.reply_markup = { inline_keyboard: inlineKeyboard };
   
   await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
@@ -99,95 +81,147 @@ async function answerCallbackQuery(callbackQueryId: string) {
   });
 }
 
-// 3. Web Service Handler Flow
+// 4. Public Port Routing Engine (Webhook Receiver)
 const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/api/webhook') {
-    let dataBuffer = '';
-    req.on('data', chunk => { dataBuffer += chunk; });
+    let buffer = '';
+    req.on('data', chunk => { buffer += chunk; });
     req.on('end', async () => {
       try {
-        const update = JSON.parse(dataBuffer);
+        const update = JSON.parse(buffer);
 
-        // Handle Messages
+        // A. Handle Regular Core Text Actions
         if (update.message) {
           const userId = update.message.from.id;
           const text = update.message.text || "";
 
+          // Channel Membership Gate Verification Check
           if (!(await checkChannelMembership(userId))) {
-            await sendTelegramMessage(userId, "⚠️ *Access Locked!*\nYou must join our official updates channel before you can view products or complete purchases.", [
+            await sendTelegramMessage(userId, "⚠️ <b>Access Locked!</b>\nYou must join our official updates channel before browsing our digital services.", [
               [{ text: "📢 Join Channel", url: "https://t.me/affinitysales570" }],
               [{ text: "✅ Verified / Check Status", callback_data: "verify_join" }]
             ]);
             res.writeHead(200); res.end('OK'); return;
           }
 
-          if (text === "/admin" && userId === ADMIN_ID) {
-            await sendTelegramMessage(userId, "🛠 *Affinity Control Dashboard*", [
-              [{ text: "📦 Open Store Catalog Manager", callback_data: "admin_catalog" }],
-              [{ text: "🔄 Force Sync API", callback_data: "admin_force_sync" }]
-            ]);
+          if (text === "/sync" && userId === ADMIN_ID) {
+            await fetchRemoteProducts();
+            await sendTelegramMessage(ADMIN_ID, "🔄 <b>Cache Synchronized!</b> Live product array pulled successfully from remote endpoint.");
             res.writeHead(200); res.end('OK'); return;
           }
 
           if (text.startsWith("/start")) {
-            await sendTelegramMessage(userId, "👋 *Welcome to Affinity Sales Storefront!*\nBrowse premium accounts, automate tool keys, and manage instant digital subscriptions safely.", [
-              [{ text: "🛒 Products", callback_data: "menu_products" }, { text: "💰 Balance", callback_data: "menu_balance" }],
-              [{ text: "👥 Referral Link", callback_data: "menu_referral" }, { text: "🆘 Live Support", callback_data: "menu_support" }]
+            await sendTelegramMessage(userId, "👋 <b>Welcome to Affinity Sales Storefront!</b>\nSelect an option below to explore our services:", [
+              [{ text: "🛒 Products", callback_data: "store_products" }, { text: "💰 My Balance", callback_data: "store_balance" }]
             ]);
           }
         }
 
-        // Handle Inline Buttons Click Data
+        // B. Handle Button Interactive Clicking Data Flow
         if (update.callback_query) {
           const userId = update.callback_query.from.id;
           const callbackData = update.callback_query.data;
           await answerCallbackQuery(update.callback_query.id);
 
-          if (callbackData === "menu_products") {
-            const storefrontList = globalProducts
-              .filter(p => p.is_enabled && p.stock_count > 0)
-              .map((p, index) => `🛍️ *${index + 1}. ${p.title}*\n💵 Price: $${(p.price_cents / 100).toFixed(2)}\n📝 _${p.description}_\n───────────────`)
-              .join('\n\n');
+          if (callbackData === "store_products") {
+            const liveItems = await fetchRemoteProducts();
+            
+            if (liveItems.length === 0) {
+              await sendTelegramMessage(userId, "🛒 <b>Affinity Catalog</b>\n\nNo active products found inside the network catalog right now.");
+              res.writeHead(200); res.end('OK'); return;
+            }
 
-            await sendTelegramMessage(userId, `🛒 *Affinity Active Catalog*\n\n${storefrontList || "No items currently loaded."}`);
-          
-          } else if (callbackData === "menu_balance") {
-            await sendTelegramMessage(userId, "💰 *Your Virtual Account Balance*\n\n🔹 Current Balance: *$0.00 USDT*\n\nTo top up using automated Binance Pay APIs, use the payment terminal.");
-          
-          } else if (callbackData === "menu_referral") {
-            await sendTelegramMessage(userId, `👥 *Affinity Referral Program*\n\nEarn rewards tracking balance automatically!\n💰 *Reward:* $0.04 per user verified join.\n\n🔗 *Your Direct Invite Link:*\nhttps://t.me/affinitysales570_bot?start=ref_${userId}`);
-          
-          } else if (callbackData === "menu_support") {
-            await sendTelegramMessage(userId, "🆘 *Direct Assistance Terminal*\nHave questions? Message the manager directly: @johnconstantine570");
-          
-          } else if (callbackData === "admin_force_sync") {
-            await syncLiveVendorCatalog();
-            await sendTelegramMessage(ADMIN_ID, "✅ Live API catalog refreshed and synchronized successfully.");
-
-          } else if (callbackData === "admin_catalog") {
-            let adminOutput = "⚙️ *Live Inventory Control Sheet*\nClick to toggle visibility or exclude elements:\n\n";
-            globalProducts.forEach(p => {
-              adminOutput += `${p.is_enabled ? '✅' : '❌'} ${p.title} [Stock: ${p.stock_count}]\n`;
+            // Maps out items with their explicit delivery type icons (⚡ or 🤝) as requested
+            const keyboardButtons = liveItems.map((item) => {
+              const deliveryIcon = item.is_manual ? "🤝 Manual" : "⚡ Instant";
+              return [{
+                text: `${item.name_en} - $${item.your_price.toFixed(2)} (${deliveryIcon})`,
+                callback_data: `view_prod_${item.id}`
+              }];
             });
-            await sendTelegramMessage(userId, adminOutput, [
-              [{ text: "🔄 Refresh Settings", callback_data: "admin_catalog" }]
-            ]);
+
+            await sendTelegramMessage(userId, "🛍️ <b>Affinity Active Storefront</b>\nSelect a product to view detailed descriptions and stock balances:", keyboardButtons);
+          
+          } else if (callbackData.startsWith("view_prod_")) {
+            const productId = callbackData.replace("view_prod_", "");
+            const selectedItem = currentCachedProducts.find(p => p.id === productId);
+
+            if (selectedItem) {
+              const deliveryType = selectedItem.is_manual ? "🤝 Manual Delivery" : "⚡ Instant Delivery";
+              const infoText = `📦 <b>${selectedItem.name_en}</b>\n\n` +
+                               `📝 <i>${selectedItem.desc_en}</i>\n\n` +
+                               `💵 <b>Price:</b> $${selectedItem.your_price.toFixed(2)}\n` +
+                               `📊 <b>Stock Status:</b> ${selectedItem.stock}\n` +
+                               `🚚 <b>Type:</b> ${deliveryType}`;
+
+              await sendTelegramMessage(userId, infoText, [
+                [{ text: "💳 Buy Now", callback_data: `buy_item_${selectedItem.id}` }],
+                [{ text: "🔙 Return to Catalog", callback_data: "store_products" }]
+              ]);
+            }
+          
+          } else if (callbackData.startsWith("buy_item_")) {
+            const productId = callbackData.replace("buy_item_", "");
+            const itemToBuy = currentCachedProducts.find(p => p.id === productId);
+
+            if (itemToBuy) {
+              // Send order request using Lara's exact purchase schema criteria mapping
+              const buyResponse = await fetch(`${API_URL}/purchase`, {
+                method: "POST",
+                headers: {
+                  "Authorization": `Bearer ${API_KEY}`,
+                  "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                  product_id: productId,
+                  qty: 1,
+                  buyer_info: `@User_${userId}`
+                })
+              });
+
+              const purchaseResult: any = await buyResponse.json();
+
+              if (purchaseResult.success) {
+                if (itemToBuy.is_manual) {
+                  await sendTelegramMessage(userId, "✅ <b>Order Received!</b> Delivery within minutes.");
+                } else if (purchaseResult.codes && purchaseResult.codes.length > 0) {
+                  const codesList = purchaseResult.codes.join("\n");
+                  await sendTelegramMessage(userId, `🎉 <b>Purchase Complete!</b>\n\n🔑 <b>Your Digital Key/Code:</b>\n<code>${codesList}</code>`);
+                }
+                
+                // Notify Owner/Admin securely about the sale
+                await sendTelegramMessage(ADMIN_ID, `🔔 <b>New Order Logged:</b>\nProduct ID: ${productId}\nBuyer ID: ${userId}\nStatus: ${purchaseResult.status}`);
+              } else {
+                const faultReason = purchaseResult.error || "Transaction declined by vendor framework.";
+                await sendTelegramMessage(userId, `❌ <b>Order Failed:</b> ${faultReason}`);
+              }
+            }
+          
+          } else if (callbackData === "store_balance") {
+            // Hit Lara's explicit /balance request endpoint
+            const balResponse = await fetch(`${API_URL}/balance`, {
+              headers: { "Authorization": `Bearer ${API_KEY}` }
+            });
+            const balData: any = await balResponse.json();
+            const walletBalance = balData.balance || "0.00";
+
+            await sendTelegramMessage(userId, `💰 <b>Your Affinity Wallet Balance</b>\n\n🔹 Current Balance: <b>$${walletBalance} USDT</b>\n\nTop ups are automatically credited via the gateway system.`);
           
           } else if (callbackData === "verify_join") {
             if (await checkChannelMembership(userId)) {
-              await sendTelegramMessage(userId, "✅ *Verification Passed!* Access granted. Run /start to open your storefront layout.");
+              await sendTelegramMessage(userId, "✅ <b>Verification Successful!</b> Access granted. Send /start to display your primary storefront layout.");
             } else {
-              await sendTelegramMessage(userId, "❌ *Verification Failed.* Please join @affinitysales570 before trying again.");
+              await sendTelegramMessage(userId, "❌ <b>Verification Failed.</b> You still haven't joined the updates channel.");
             }
           }
         }
       } catch (err) {
-        console.error("Webhook processing fault:", err);
+        console.error("Webhook processing tracking alert:", err);
       }
       res.writeHead(200); res.end('OK');
     });
   } else {
-    res.writeHead(200); res.end('Affinity Core Server Active');
+    res.writeHead(200); res.end('Affinity Live Node Backend Protocol Online');
   }
 });
 
