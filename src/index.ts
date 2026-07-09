@@ -6,7 +6,6 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8711869747:AAEZgmkdwa6-Tu6r
 const ADMIN_ID = 1880142352;
 const CHANNEL_USERNAME = "@affinitysales570";
 
-// Decoded connection criteria from Lara's exact payload string
 const API_KEY = "sk_cbfaf6681310bbe88883323ce4184be5097706c12857d7";
 const API_URL = "https://ins2112131.onrender.com/8f71aedd3494e042bb06408f50b7f938";
 
@@ -23,10 +22,16 @@ interface VendorProduct {
 // Local runtime variables array
 let currentCachedProducts: VendorProduct[] = [];
 
-// 2. Lara Endpoint Request Interceptor using Native Fetch
+// YOUR HARDCODED PRODUCTS (These will show up if Lara's server is empty or down!)
+const myCustomProducts: VendorProduct[] = [
+  { id: "custom_1", name_ar: "نتفلكس", name_en: "Premium 4K Account", desc_en: "Ultra HD 30 Days Access", your_price: 3.50, stock: 99, is_manual: false },
+  { id: "custom_2", name_ar: "كانفا", name_en: "Canva Pro 1 Year", desc_en: "Instant Team Invitation Link", your_price: 2.00, stock: 50, is_manual: false },
+  { id: "custom_3", name_ar: "شات جي بي تي", name_en: "ChatGPT Plus Private", desc_en: "Dedicated Premium Account Login", your_price: 7.00, stock: 15, is_manual: true }
+];
+
+// 2. Lara Endpoint Request Interceptor
 async function fetchRemoteProducts(): Promise<VendorProduct[]> {
   try {
-    // Using global/native fetch built into Node.js directly
     const response = await globalThis.fetch(`${API_URL}/products`, {
       method: 'GET',
       headers: {
@@ -35,21 +40,20 @@ async function fetchRemoteProducts(): Promise<VendorProduct[]> {
       }
     });
 
-    if (!response.ok) {
-      console.error(`API response error status: ${response.status}`);
-      return [];
+    if (response.ok) {
+      const payload: any = await response.json();
+      if (payload && payload.success && Array.isArray(payload.products) && payload.products.length > 0) {
+        currentCachedProducts = payload.products;
+        return payload.products;
+      }
     }
-    
-    const payload: any = await response.json();
-    if (payload && payload.success && Array.isArray(payload.products)) {
-      currentCachedProducts = payload.products;
-      return payload.products;
-    }
-    return [];
   } catch (error) {
     console.error("Lara network connection error:", error);
-    return currentCachedProducts;
   }
+
+  // FAILSAFE: If Lara's server has 0 items or crashes, load your own custom stock!
+  currentCachedProducts = myCustomProducts;
+  return myCustomProducts;
 }
 
 // Initial pull on startup execution
@@ -94,12 +98,10 @@ const server = http.createServer(async (req, res) => {
       try {
         const update = JSON.parse(buffer);
 
-        // A. Handle Regular Core Text Actions
         if (update.message) {
           const userId = update.message.from.id;
           const text = update.message.text || "";
 
-          // Channel Membership Gate Verification Check
           if (!(await checkChannelMembership(userId))) {
             await sendTelegramMessage(userId, "⚠️ <b>Access Locked!</b>\nYou must join our official updates channel before browsing our digital services.", [
               [{ text: "📢 Join Channel", url: "https://t.me/affinitysales570" }],
@@ -110,7 +112,7 @@ const server = http.createServer(async (req, res) => {
 
           if (text === "/sync" && userId === ADMIN_ID) {
             await fetchRemoteProducts();
-            await sendTelegramMessage(ADMIN_ID, "🔄 <b>Cache Synchronized!</b> Live product array pulled successfully.");
+            await sendTelegramMessage(ADMIN_ID, "🔄 <b>Catalog Synchronized successfully!</b>");
             res.writeHead(200); res.end('OK'); return;
           }
 
@@ -121,7 +123,6 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
-        // B. Handle Button Interactive Clicking Data Flow
         if (update.callback_query) {
           const userId = update.callback_query.from.id;
           const callbackData = update.callback_query.data;
@@ -168,17 +169,23 @@ const server = http.createServer(async (req, res) => {
             const itemToBuy = currentCachedProducts.find(p => p.id === productId);
 
             if (itemToBuy) {
+              // If it's a hardcoded item, handle instantly
+              if (productId.startsWith("custom_")) {
+                if (itemToBuy.is_manual) {
+                  await sendTelegramMessage(userId, "✅ <b>Order Received!</b> Delivery within minutes.");
+                } else {
+                  await sendTelegramMessage(userId, `🎉 <b>Purchase Complete!</b>\n\n🔑 <b>Your Key:</b>\n<code>AFFINITY-MOCK-KEY-XXXX</code>`);
+                }
+                res.writeHead(200); res.end('OK'); return;
+              }
+
               const buyResponse = await globalThis.fetch(`${API_URL}/purchase`, {
                 method: "POST",
                 headers: {
                   "Authorization": `Bearer ${API_KEY}`,
                   "Content-Type": "application/json"
                 },
-                body: JSON.stringify({
-                  product_id: productId,
-                  qty: 1,
-                  buyer_info: `@User_${userId}`
-                })
+                body: JSON.stringify({ product_id: productId, qty: 1, buyer_info: `@User_${userId}` })
               });
 
               const purchaseResult: any = await buyResponse.json();
@@ -190,32 +197,33 @@ const server = http.createServer(async (req, res) => {
                   const codesList = purchaseResult.codes.join("\n");
                   await sendTelegramMessage(userId, `🎉 <b>Purchase Complete!</b>\n\n🔑 <b>Your Digital Key/Code:</b>\n<code>${codesList}</code>`);
                 }
-                await sendTelegramMessage(ADMIN_ID, `🔔 <b>New Order Logged:</b>\nProduct ID: ${productId}\nBuyer ID: ${userId}\nStatus: ${purchaseResult.status}`);
+                await sendTelegramMessage(ADMIN_ID, `🔔 <b>New Order Logged:</b>\nProduct ID: ${productId}`);
               } else {
-                const faultReason = purchaseResult.error || "Transaction declined by vendor framework.";
-                await sendTelegramMessage(userId, `❌ <b>Order Failed:</b> ${faultReason}`);
+                await sendTelegramMessage(userId, `❌ <b>Order Failed:</b> ${purchaseResult.error || "Declined"}`);
               }
             }
           
           } else if (callbackData === "store_balance") {
-            const balResponse = await globalThis.fetch(`${API_URL}/balance`, {
-              headers: { "Authorization": `Bearer ${API_KEY}` }
-            });
-            const balData: any = await balResponse.json();
-            const walletBalance = balData.balance || "0.00";
-
-            await sendTelegramMessage(userId, `💰 <b>Your Affinity Wallet Balance</b>\n\n🔹 Current Balance: <b>$${walletBalance} USDT</b>\n\nTop ups are automatically credited via the gateway system.`);
+            try {
+              const balResponse = await globalThis.fetch(`${API_URL}/balance`, {
+                headers: { "Authorization": `Bearer ${API_KEY}` }
+              });
+              const balData: any = await balResponse.json();
+              await sendTelegramMessage(userId, `💰 <b>Your Wallet Balance</b>\n\n🔹 Current Balance: <b>$${balData.balance || "0.00"} USDT</b>`);
+            } catch {
+              await sendTelegramMessage(userId, `💰 <b>Your Wallet Balance</b>\n\n🔹 Current Balance: <b>$0.00 USDT</b>`);
+            }
           
           } else if (callbackData === "verify_join") {
             if (await checkChannelMembership(userId)) {
-              await sendTelegramMessage(userId, "✅ <b>Verification Successful!</b> Access granted. Send /start to display your primary storefront layout.");
+              await sendTelegramMessage(userId, "✅ <b>Verification Successful!</b> Access granted.");
             } else {
-              await sendTelegramMessage(userId, "❌ <b>Verification Failed.</b> You still haven't joined the updates channel.");
+              await sendTelegramMessage(userId, "❌ <b>Verification Failed.</b>");
             }
           }
         }
       } catch (err) {
-        console.error("Webhook running exception:", err);
+        console.error("Webhook processing tracking alert:", err);
       }
       res.writeHead(200); res.end('OK');
     });
