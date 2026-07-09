@@ -1,5 +1,6 @@
-import * as crypto from 'crypto';
-import * as http from 'http';
+import crypto from 'crypto';
+import http from 'http';
+import fetch from 'node-fetch'; // Explicitly force the network fetch engine to prevent silent crashes
 
 // 1. Core Environmental Variables Mapping
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8711869747:AAEZgmkdwa6-Tu6rYXalBx0ypleUGCCwT-o";
@@ -44,7 +45,7 @@ async function fetchRemoteProducts(): Promise<VendorProduct[]> {
     return [];
   } catch (error) {
     console.error("Lara network endpoint tracking issue:", error);
-    return currentCachedProducts; // Return cached snapshot on failure
+    return currentCachedProducts;
   }
 }
 
@@ -63,7 +64,7 @@ async function checkChannelMembership(userId: number): Promise<boolean> {
 }
 
 async function sendTelegramMessage(chatId: number, text: string, inlineKeyboard?: any) {
-  const payload: any = { chat_id: chatId, text: text, parse_mode: "HTML" }; // Match HTML spec requirement
+  const payload: any = { chat_id: chatId, text: text, parse_mode: "HTML" };
   if (inlineKeyboard) payload.reply_markup = { inline_keyboard: inlineKeyboard };
   
   await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
@@ -131,7 +132,6 @@ const server = http.createServer(async (req, res) => {
               res.writeHead(200); res.end('OK'); return;
             }
 
-            // Maps out items with their explicit delivery type icons (⚡ or 🤝) as requested
             const keyboardButtons = liveItems.map((item) => {
               const deliveryIcon = item.is_manual ? "🤝 Manual" : "⚡ Instant";
               return [{
@@ -165,7 +165,6 @@ const server = http.createServer(async (req, res) => {
             const itemToBuy = currentCachedProducts.find(p => p.id === productId);
 
             if (itemToBuy) {
-              // Send order request using Lara's exact purchase schema criteria mapping
               const buyResponse = await fetch(`${API_URL}/purchase`, {
                 method: "POST",
                 headers: {
@@ -188,8 +187,6 @@ const server = http.createServer(async (req, res) => {
                   const codesList = purchaseResult.codes.join("\n");
                   await sendTelegramMessage(userId, `🎉 <b>Purchase Complete!</b>\n\n🔑 <b>Your Digital Key/Code:</b>\n<code>${codesList}</code>`);
                 }
-                
-                // Notify Owner/Admin securely about the sale
                 await sendTelegramMessage(ADMIN_ID, `🔔 <b>New Order Logged:</b>\nProduct ID: ${productId}\nBuyer ID: ${userId}\nStatus: ${purchaseResult.status}`);
               } else {
                 const faultReason = purchaseResult.error || "Transaction declined by vendor framework.";
@@ -198,7 +195,6 @@ const server = http.createServer(async (req, res) => {
             }
           
           } else if (callbackData === "store_balance") {
-            // Hit Lara's explicit /balance request endpoint
             const balResponse = await fetch(`${API_URL}/balance`, {
               headers: { "Authorization": `Bearer ${API_KEY}` }
             });
