@@ -1,17 +1,11 @@
 import * as crypto from 'crypto';
-// Note: Node 18+ has native fetch, using global fetch here
+import * as http from 'http';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8711869747:AAEZgmkdwa6-Tu6rYXalBx0ypleUGCCwT-o";
 const ADMIN_ID = 1880142352;
 const CHANNEL_USERNAME = "@affinitysales570";
 const BINANCE_KEY = process.env.BINANCE_PAY_API_KEY || "vce0dm45ePlzKZ9AETDjE0G8HqahL7dtPO7lB7GLcZmAMJwwZKKcCmacn2cyJXBg";
 const BINANCE_SECRET = process.env.BINANCE_PAY_SECRET || "oATEntQE4k6GtW2F5OF4MkVzDkhfecOwNzbHYD32CRFcJ0f1gSEfpgXRckC6hf7s";
-
-// Mock Database arrays to keep it fast and simple
-let usersDb: any[] = [];
-let productsDb: any[] = [
-  { id: "1", title: "Premium AI Tool", description: "1 Month Access", price_cents: 500, source: "manual", is_enabled: true }
-];
 
 async function checkChannelMembership(userId: number): Promise<boolean> {
   try {
@@ -35,8 +29,15 @@ async function sendTelegramMessage(chatId: number, text: string, inlineKeyboard?
   });
 }
 
-// Render server layout to listen to webhooks
-import * as http from 'http';
+async function answerCallbackQuery(callbackQueryId: string, text?: string) {
+  const payload: any = { callback_query_id: callbackQueryId };
+  if (text) payload.text = text;
+  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
 
 const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/api/webhook') {
@@ -45,6 +46,8 @@ const server = http.createServer(async (req, res) => {
     req.on('end', async () => {
       try {
         const update = JSON.parse(body);
+
+        // 1. Handle Regular Text Messages
         if (update.message) {
           const userId = update.message.from.id;
           const text = update.message.text || "";
@@ -72,6 +75,33 @@ const server = http.createServer(async (req, res) => {
             ]);
           }
         }
+
+        // 2. Handle Inline Button Clicks (Callbacks)
+        if (update.callback_query) {
+          const userId = update.callback_query.from.id;
+          const data = update.callback_query.data;
+          const callbackId = update.callback_query.id;
+
+          await answerCallbackQuery(callbackId);
+
+          if (data === "menu_products") {
+            await sendTelegramMessage(userId, "📦 Available Products:\n\n1. Premium AI Tool - $5.00\n\n(Use /admin to configure or sync reseller lists)");
+          } else if (data === "menu_balance") {
+            await sendTelegramMessage(userId, "💰 Your Current Balance: $0.00\n\nTo top up via Binance Pay, send /topup <amount>.");
+          } else if (data === "menu_referral") {
+            await sendTelegramMessage(userId, `👥 Referral Program:\n\nShare your link to earn $0.04 per valid join!\n\nYour Link: https://t.me/affinitysales570_bot?start=ref_${userId}`);
+          } else if (data === "menu_support") {
+            await sendTelegramMessage(userId, "🆘 Need assistance? Contact our support channel directly here: @johnconstantine570");
+          } else if (data === "verify_join") {
+            const hasJoinedNow = await checkChannelMembership(userId);
+            if (hasJoinedNow) {
+              await sendTelegramMessage(userId, "✅ Verification Successful! Welcome inside.");
+            } else {
+              await sendTelegramMessage(userId, "❌ You still haven't joined the channel yet.");
+            }
+          }
+        }
+
       } catch (e) { console.error(e); }
       res.writeHead(200); res.end('OK');
     });
